@@ -1,158 +1,117 @@
-import CRC from 'crc-32';
-import _ from 'lodash';
+import { each } from 'lodash';
 
-import { IBook, IBookRow, BookMode } from '../types';
-
-const SOCKET_URL = 'wss://api-pub.bitfinex.com/ws/2';
+import { IBook, IBookRow, BookMode, Order } from '../types';
 
 export type OnDataCB = (value: Pick<IBook, BookMode>) => void;
 
-type Order = { [key: string]: IBookRow };
-
-type Psnap = { [key in BookMode]?: string[] };
+type ChannelParams = { pair: string; prec: string };
 
 export class OrderBookChannel {
-  private ws: WebSocket | null = null;
+  private params: ChannelParams;
+  private ws: WebSocket;
   private bids: Order = {};
   private asks: Order = {};
-  private psnap: Psnap = {};
-  private mcnt = 0;
+  private chanId: string | null = null;
+  private isFirstUpdate = true;
 
   private onDataCb: OnDataCB | null = null;
+
+  public constructor(ws: WebSocket, params: ChannelParams) {
+    this.ws = ws;
+    this.params = params;
+    this.ws.onmessage = this.onMessage;
+  }
 
   public onData(cb: OnDataCB) {
     this.onDataCb = cb;
   }
 
-  public init({ pair, prec }: { pair: string; prec: string }) {
-    this.ws = new WebSocket(SOCKET_URL);
-
-    this.ws.onopen = this.onWsOpen(pair, prec);
-    this.ws.onmessage = this.onMessage;
+  public subscribe() {
+    this.ws.send(
+      JSON.stringify({
+        pair: this.params.pair,
+        prec: this.params.prec,
+        event: 'subscribe',
+        channel: 'book',
+      }),
+    );
   }
 
-  public closeChannel() {
-    if (!this.ws) return;
+  public unsubscribe() {
+    //if already successfully subscribed, then unsubscribe
+    if (this.chanId) {
+      this.unsubscribeIfWSOpen(this.chanId);
+    }
+    //if this.chanId is null it means we haven't got the response of the subscribe call yet,
+    //and will handle the unsubscription later in onMessage callback
+  }
 
-    if (this.ws.readyState === this.ws.CONNECTING) {
-      this.ws.onopen = () => this.ws?.close();
-    } else {
-      this.ws.close()
+  private unsubscribeIfWSOpen(chanId: string) {
+    if (this.isWSOpen()) {
+      this.ws.send(
+        JSON.stringify({
+          event: 'unsubscribe',
+          chanId,
+        }),
+      );
     }
   }
 
-  private resetBook() {
-    this.bids = {};
-    this.asks = {};
-    this.psnap = {};
-    this.mcnt = 0;
+  private isWSOpen() {
+    return this.ws.readyState === this.ws.OPEN;
   }
 
-  private onWsOpen(pair: string, prec: string) {
-    return () => {
-      this.resetBook();
-      this.ws?.send(JSON.stringify({ event: 'conf', flags: 131072 }));
-      this.ws?.send(
-        JSON.stringify({
-          pair,
-          prec,
-          event: 'subscribe',
-          channel: 'book',
-        }),
-      );
-    };
-  }
-
-  // found this code that handles the data processing in the docomentation
-  // here: https://blog.bitfinex.com/api/bitfinex-api-order-books-checksums/
   private onMessage = ({ data }: MessageEvent<any>) => {
-    let msg = JSON.parse(data);
-    if (msg.event) return;
-    if (msg[1] === 'hb') return;
-
-    if (msg[1] === 'cs') {
-      const checksum = msg[2];
-      const csdata = [];
-      const bidsKeys = this.psnap.bids;
-      const asksKeys = this.psnap.asks;
-
-      for (let i = 0; i < 25; i++) {
-        if (bidsKeys && bidsKeys[i]) {
-          const price = bidsKeys[i];
-          const pp = this.bids[price];
-          csdata.push(pp.price, pp.amount);
+    const chunk = JSON.parse(data);
+    if (chunk.event) {
+      if (chunk.event === 'subscribed') {
+        //if already subscribed for this channel or some other channel response came back, then unsubscribe
+        if (this.chanId || !this.isSameChannelParmas(chunk)) {
+          return this.unsubscribeIfWSOpen(chunk.chanId);
         }
-        if (asksKeys && asksKeys[i]) {
-          const price = asksKeys[i];
-          const pp = this.asks[price];
-          csdata.push(pp.price, -pp.amount);
-        }
-      }
-
-      const csStr = csdata.join(':');
-      const csCalc = CRC.str(csStr);
-      if (csCalc !== checksum) {
-        console.error('CHECKSUM_FAILED');
+        this.chanId = chunk.chanId;
       }
       return;
     }
+    if (chunk[1] === 'hb' || chunk[1] === 'cs') return;
 
-    if (this.mcnt === 0) {
-      _.each(msg[1], (pp) => {
-        pp = { price: pp[0], cnt: pp[1], amount: pp[2] };
-        const side = pp.amount >= 0 ? 'bids' : 'asks';
-        pp.amount = Math.abs(pp.amount);
-        this[side][pp.price] = pp;
-      });
-    } else {
-      msg = msg[1];
-      const pp = { price: msg[0], cnt: msg[1], amount: msg[2] };
-      if (!pp.cnt) {
-        let found = true;
-
-        if (pp.amount > 0) {
-          if (this.bids[pp.price]) {
-            delete this.bids[pp.price];
-          } else {
-            found = false;
-          }
-        } else if (pp.amount < 0) {
-          if (this.asks[pp.price]) {
-            delete this.asks[pp.price];
-          } else {
-            found = false;
-          }
-        }
-
-        if (!found) {
-          console.error('Book delete failed. Price point not found');
-        }
-      } else {
-        const side = pp.amount >= 0 ? 'bids' : 'asks';
-        pp.amount = Math.abs(pp.amount);
-        this[side][pp.price] = pp;
-      }
-
-      _.each(['bids', 'asks'], (side: 'bids' | 'asks') => {
-        const sbook = this[side];
-        const bprices = Object.keys(sbook);
-        const prices = bprices.sort((a, b) => {
-          if (side === 'bids') {
-            return +a >= +b ? -1 : 1;
-          }
-          return +a <= +b ? -1 : 1;
-        });
-        this.psnap[side] = prices;
-      });
+    const chunkChannelId = chunk[0];
+    if (!this.chanId || this.chanId !== chunkChannelId) {
+      return;
     }
-    this.mcnt++;
 
-    const bids = Object.values(this.bids) as IBookRow[];
-    // to have the correct order
-    bids.reverse();
+    if (this.isFirstUpdate) {
+      each(chunk[1], ([price, cnt, amount]) =>
+        this.storeBookRow({ price, cnt, amount }),
+      );
+      this.isFirstUpdate = false;
+    } else {
+      const [price, cnt, amount] = chunk[1];
+      if (cnt) this.storeBookRow({ price, cnt, amount });
+      else this.removeBookRow({ price, cnt, amount });
+    }
+
     this.onDataCb?.({
-      bids,
-      asks: Object.values(this.asks),
+      bids: { ...this.bids },
+      asks: { ...this.asks },
     });
   };
+
+  private storeBookRow(row: IBookRow) {
+    const side = row.amount >= 0 ? 'bids' : 'asks';
+    row.amount = Math.abs(row.amount);
+    this[side][row.price] = row;
+  }
+
+  private removeBookRow(row: IBookRow) {
+    const book = row.amount > 0 ? this.bids : this.asks;
+    delete book[row.price];
+  }
+
+  private isSameChannelParmas(chunkParams: ChannelParams) {
+    return (
+      this.params.pair === chunkParams.pair &&
+      this.params.prec === chunkParams.prec
+    );
+  }
 }

@@ -1,61 +1,71 @@
 import { useEffect, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { isEmpty } from 'lodash';
 import Loading from 'react-loading';
+
+import Actions from './components/Actions';
+import Book from './components/Book';
 
 import { updateAsks, updateBids, selectBookSlice } from './redux/bookSlice';
 import { OrderBookChannel, OnDataCB } from './services/OrderBookChannel';
+import { useSocketConnect } from './hooks/useSocketConnect';
+import { SOCKET_URL } from './configs/constants';
 
-import Actions from './components/Actions';
-import BookSection from './components/BookSection';
-
-import { IBookRow } from './types';
+import { Order } from './types';
 
 import './index.scss';
 
 const App = () => {
   const dispatch = useDispatch();
-  const { bids, asks, prec, pair, isConnected } = useSelector(selectBookSlice);
+  const { bids, asks, prec, pair, scale, isConnected } =
+    useSelector(selectBookSlice);
+  const ws = useSocketConnect(SOCKET_URL, isConnected);
 
-  const hasData = bids.length > 0 || asks.length > 0;
+  const hasData = !isEmpty(bids) || !isEmpty(asks);
 
   const setBids = useCallback(
-    (value: IBookRow[]) => dispatch(updateBids(value)),
+    (value: Order) => dispatch(updateBids(value)),
     [dispatch],
   );
   const setAsks = useCallback(
-    (value: IBookRow[]) => dispatch(updateAsks(value)),
+    (value: Order) => dispatch(updateAsks(value)),
     [dispatch],
+  );
+  const updateBook: OnDataCB = useCallback(
+    (book) => {
+      setBids(book.bids);
+      setAsks(book.asks);
+    },
+    [setBids, setAsks],
   );
 
   useEffect(() => {
-    const orderBookChannel = new OrderBookChannel();
-
-    const updateBook: OnDataCB = (book) => {
-      setBids(book.bids);
-      setAsks(book.asks);
-    };
-    orderBookChannel.onData(updateBook);
-
-    // if disconnected leave the book state as is, and do not start a socket connection
-    if (isConnected) {
-      updateBook({ bids: [], asks: [] });
-      orderBookChannel.init({ pair, prec });
+    if (!ws || ws.readyState !== ws.OPEN) {
+      return;
     }
 
+    const orderBookChannel = new OrderBookChannel(ws, { pair, prec });
+    orderBookChannel.onData(updateBook);
+
+    updateBook({ bids: {}, asks: {} });
+    orderBookChannel.subscribe();
+
     return () => {
-      orderBookChannel.closeChannel();
+      orderBookChannel.unsubscribe();
     };
-  }, [pair, prec, isConnected, setBids, setAsks]);
+  }, [pair, prec, ws, setBids, setAsks]);
 
   return (
     <div className="app-container">
-      <Actions isConnected={isConnected} prec={prec} pair={pair} />
+      <Actions
+        isConnected={isConnected}
+        scale={scale}
+        prec={prec}
+        pair={pair}
+      />
       <div className="books-container">
         {hasData ? (
-          <>
-            <BookSection data={bids} mode="bids" />
-            <BookSection data={asks} mode="asks" />
-          </>
+          <Book bids={bids} asks={asks} scale={scale} />
         ) : (
           <div className="loading-container">
             <Loading type="spin" color="#ffffff" />

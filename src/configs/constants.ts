@@ -8,21 +8,27 @@ export const PRECISION_OPTIONS: Option[] = [
   { title: '1', value: 'P4' },
 ];
 
-export const ASKS_HEADER_COLUMNS = ['Price', 'Count', 'Amount'];
-export const BIDS_HEADER_COLUMNS = ['Amount', 'Count', 'Price'];
+export const MAX_SCALE = 3;
+export const MIN_SCALE = 0.5;
+export const SCALE_MOVE = 0.5;
+
+export const ASKS_HEADER_COLUMNS = ['Price', 'Total', 'Count', 'Amount'];
+export const BIDS_HEADER_COLUMNS = ['Amount', 'Count', 'Total', 'Price'];
 
 // using fixed pairs, though we could get this dynamically from API as well
 export const PAIRS = [
   {
     title: 'BTC/USD',
-    value: 'tBTCUSD',
+    value: 'BTCUSD',
   },
   {
     title: 'ETH/USD',
-    value: 'tETHUSD',
+    value: 'ETHUSD',
   },
 ];
 
 export const DEFAULT_PREC = PRECISION_OPTIONS[0].value;
 
 export const DEFAULT_PAIR = PAIRS[0].value;
+
+export const SOCKET_URL = 'wss://api-pub.bitfinex.com/ws/2';

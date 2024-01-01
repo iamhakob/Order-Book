@@ -4,11 +4,16 @@ export interface IBookRow {
   amount: number;
 }
 
+export type IBookTotalRow = IBookRow & { total: number };
+
+export type Order = { [key: string]: IBookRow };
+
 export interface IBook {
-  bids: IBookRow[];
-  asks: IBookRow[];
+  bids: Order;
+  asks: Order;
   isConnected: boolean;
   prec: string;
+  scale: number;
   pair: string;
 }
 

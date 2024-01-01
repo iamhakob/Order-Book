@@ -14,7 +14,7 @@ interface SelectProps {
 
 const Select: FC<SelectProps> = ({ options, label, value, onChange }) => {
   return (
-    <>
+    <div>
       <label>{label}</label>
       <select onChange={(e) => onChange(e.currentTarget.value)} value={value}>
         {options.map(({ title, value }) => (
@@ -23,7 +23,7 @@ const Select: FC<SelectProps> = ({ options, label, value, onChange }) => {
           </option>
         ))}
       </select>
-    </>
+    </div>
   );
 };
 
